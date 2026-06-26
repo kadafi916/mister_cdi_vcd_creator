@@ -6,10 +6,15 @@
 #  - OPTION: Fast mode with --fast flag (good quality, much faster)
 #  - Audio is always fully processed (soxr + loudnorm) regardless of video mode
 #  - Use --fastaudio to skip audio normalization (faster, no loudnorm)
+#  - Use --mister to bypass vcdxbuild's ~99.8-min disc size limit (MiSTer-only output)
+#    Builds the BIN/CUE manually from raw CD sectors; requires python3.
+#    Long films fit on a single CHD; real CD-i hardware cannot use the result.
 #  - Usage: ./script.sh                      (ultra quality - default)
 #           ./script.sh --fast               (fast video, full audio)
 #           ./script.sh --fastaudio          (ultra video, minimal audio)
 #           ./script.sh --fast --fastaudio   (fast video, minimal audio)
+#           ./script.sh --mister             (single disc, no size limit, MiSTer only)
+#           ./script.sh --mistrvcd           (use minimal MISTRVCD.APP instead of CDI_VCD.APP)
 # ==============================================================================
 
 # --- CONFIGURATION ---
@@ -17,13 +22,15 @@ INPUT_DIR="./input"
 OUTPUT_DIR="./output"
 CDI_FIX_DIR="./cdi_fix"
 MISTR_APP="./MISTRVCD.APP"  # Path to MISTRVCD.APP file
+MAX_DISC_SECONDS=5760        # 96 min per disc; vcdxbuild hard limit is ~99.8 min (449850 sectors / 75 minus overhead)
 
 # --- QUALITY MODE SELECTION ---
 QUALITY_MODE="ultra"  # Default to ultra
 LAX_MODE=false        # Default: don't create lax version
 AUDIO_MODE="stereo"   # Default: stereo at 224 kbps
 FAST_AUDIO=false      # Default: full audio processing (soxr + loudnorm); --fastaudio skips filters
-USE_CDIVCD=false       # Default: use MISTRVCD.APP; --cdivcd for CDI_VCD.APP
+USE_CDIVCD=true        # Default: use CDI_VCD.APP (icdia.co.uk); --mistrvcd to use minimal MISTRVCD.APP
+MISTER_MODE=false      # Default: standard vcdxbuild path; --mister bypasses disc size limit
 
 # Parse command line arguments
 for arg in "$@"; do
@@ -38,7 +45,11 @@ for arg in "$@"; do
     elif [[ "$arg" == "--auto-mono" ]]; then
         AUDIO_MODE="auto-mono"
     elif [[ "$arg" == "--cdivcd" ]]; then
-        USE_CDIVCD=true
+        USE_CDIVCD=true   # already the default; kept for backwards compatibility
+    elif [[ "$arg" == "--mistrvcd" ]]; then
+        USE_CDIVCD=false
+    elif [[ "$arg" == "--mister" ]]; then
+        MISTER_MODE=true
     fi
 done
 
@@ -90,7 +101,7 @@ install_deps() {
     local MISSING_TOOLS=0
     
     # 1. Check for Standard Tools
-    for tool in ffmpeg ffprobe mpeg2enc mplex vcdxbuild curl unzip; do
+    for tool in ffmpeg ffprobe mpeg2enc mplex vcdxbuild curl unzip bc; do
         if ! command -v $tool &> /dev/null; then 
             MISSING_TOOLS=1
             echo -e "${RED}❌ Missing tool: $tool${NC}"
@@ -103,6 +114,12 @@ install_deps() {
         echo -e "${RED}❌ Missing tool: chdman${NC}"
     fi
 
+    # 3. python3 required for --mister mode
+    if [ "$MISTER_MODE" == "true" ] && ! command -v python3 &>/dev/null; then
+        MISSING_TOOLS=1
+        echo -e "${RED}❌ Missing tool: python3 (required for --mister mode)${NC}"
+    fi
+
     if [ $MISSING_TOOLS -eq 0 ]; then
         echo -e "${GREEN}✅ All tools are installed.${NC}"
         return
@@ -113,10 +130,10 @@ install_deps() {
     
     if [[ "$OSTYPE" == "darwin"* ]]; then
         if ! command -v brew &> /dev/null; then echo -e "${RED}❌ Install Homebrew first.${NC}"; exit 1; fi
-        brew install ffmpeg mjpegtools vcdimager rom-tools
+        brew install ffmpeg mjpegtools vcdimager rom-tools bc
     elif [ -f /etc/debian_version ]; then
         sudo apt-get update
-        sudo apt-get install -y ffmpeg mjpegtools vcdimager curl unzip mame-tools
+        sudo apt-get install -y ffmpeg mjpegtools vcdimager curl unzip mame-tools bc python3
     else
         echo -e "${RED}❌ Unsupported OS. Please install dependencies manually.${NC}"
         exit 1
@@ -257,15 +274,135 @@ XMLEOF
 }
 
 # ==============================================================================
+#  BUILD IMAGE - MISTER MODE
+#  Bypasses vcdxbuild's hardcoded ~449850-sector limit by building the BIN/CUE
+#  manually from raw Mode 2 CD sectors. Output is NOT burnable to real media.
+#  Reads: compliant.mpg (current dir)
+#  Writes: videocd.bin, videocd.cue (current dir) — same as vcdxbuild would
+# ==============================================================================
+build_image_mister() {
+    local LOG_FILE="$1"
+    local VOLUME_LABEL="$2"
+
+    echo -e "\n--- IMAGE BUILD LOG (MISTER MODE - NO SIZE LIMIT) ---" >> "$LOG_FILE"
+
+    # Resolve absolute paths — vcdxbuild for the track-1 template will run from a tmpdir
+    local ABS_MISTR_APP ABS_CDI_DIR MISTR_UPPER TMPDIR
+    ABS_MISTR_APP=$(realpath "$MISTR_APP")
+    ABS_CDI_DIR=$(realpath "$CDI_FIX_DIR")
+    MISTR_UPPER=$(basename "$ABS_MISTR_APP" | tr '[:lower:]' '[:upper:]')
+    TMPDIR=$(mktemp -d)
+
+    # --- Step 1: Generate a tiny dummy VCD so vcdxbuild builds us a valid track 1 ---
+    ffmpeg -f lavfi -i "color=black:s=352x240:r=30000/1001" \
+        -t 1 -pix_fmt yuv420p -f yuv4mpegpipe - 2>/dev/null \
+        | mpeg2enc -v 0 -o "$TMPDIR/dummy.m1v" -f 1 -n n -a 2 -b 1150 -q 9 2>/dev/null
+    ffmpeg -f lavfi -i "anullsrc=r=44100:cl=stereo" \
+        -t 1 -b:a 224k -f mp2 -y "$TMPDIR/dummy.mp2" 2>/dev/null
+    mplex -f 1 -b 46 -o "$TMPDIR/compliant.mpg" \
+        "$TMPDIR/dummy.mp2" "$TMPDIR/dummy.m1v" 2>/dev/null
+
+    # Generate XML with absolute CDI paths; compliant.mpg is relative (found in TMPDIR)
+    generate_vcd_xml "$TMPDIR/videocd.xml" "$VOLUME_LABEL" "$USE_CDIVCD" \
+        "$ABS_CDI_DIR" "$ABS_MISTR_APP" "$MISTR_UPPER"
+
+    # Run vcdxbuild from TMPDIR so relative "compliant.mpg" resolves correctly
+    pushd "$TMPDIR" > /dev/null
+    vcdxbuild videocd.xml >> "$LOG_FILE" 2>&1
+    popd > /dev/null
+
+    if [ ! -f "$TMPDIR/videocd.bin" ]; then
+        echo -e "${RED}❌ MiSTer mode: failed to generate track 1 template.${NC}"
+        rm -rf "$TMPDIR"
+        return 1
+    fi
+
+    # --- Step 2: Extract track 1 (300 sectors) + pregap (150 sectors) = 450 × 2352 bytes ---
+    dd if="$TMPDIR/videocd.bin" bs=$((450 * 2352)) count=1 \
+        of="$TMPDIR/track_header.bin" 2>/dev/null
+
+    # Patch volume label in ISO 9660 PVD
+    # Sector 16 raw offset: 16 × 2352 = 37632; + 24 bytes sector overhead; + 40 bytes PVD field = 37696
+    printf '%-32s' "${VOLUME_LABEL:0:32}" | \
+        dd of="$TMPDIR/track_header.bin" bs=1 seek=37696 conv=notrunc 2>/dev/null
+
+    # --- Step 3: Pack MPEG stream into raw Mode 2 Form 2 CD sectors (python3) ---
+    # Each VCD MPEG pack is exactly 2324 bytes; wrap with 12-byte sync + 4-byte header +
+    # 8-byte subheader + 4-byte EDC = 2352-byte raw sector. No size limit enforced.
+    python3 - compliant.mpg "$TMPDIR/track2.bin" << 'PYEOF'
+import sys
+
+SYNC = b'\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00'
+PACK_SIZE = 2324
+ABS_START = 450  # track1 (300 sectors) + pregap (150 sectors)
+SUBHDR = b'\x01\x01\x08\x00\x01\x01\x08\x00'
+
+def bcd(v): return ((v // 10) << 4) | (v % 10)
+
+def make_sector(data, n):
+    f, s, m = n % 75, (n // 75) % 60, n // 75 // 60
+    return SYNC + bytes([bcd(m), bcd(s), bcd(f), 2]) + SUBHDR + data + b'\x00' * 4
+
+with open(sys.argv[1], 'rb') as fi, open(sys.argv[2], 'wb') as fo:
+    n = 0
+    while True:
+        d = fi.read(PACK_SIZE)
+        if not d:
+            break
+        if len(d) < PACK_SIZE:
+            d += b'\x00' * (PACK_SIZE - len(d))
+        fo.write(make_sector(d, ABS_START + n))
+        n += 1
+PYEOF
+
+    if [ ! -s "$TMPDIR/track2.bin" ]; then
+        echo -e "${RED}❌ MiSTer mode: failed to pack MPEG stream into CD sectors.${NC}"
+        rm -rf "$TMPDIR"
+        return 1
+    fi
+
+    # --- Step 4: Assemble final BIN + CUE (same filenames vcdxbuild would produce) ---
+    cat "$TMPDIR/track_header.bin" "$TMPDIR/track2.bin" > videocd.bin
+
+    cat > videocd.cue << 'CUEEOF'
+FILE "videocd.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+  TRACK 02 MODE2/2352
+    INDEX 00 00:04:00
+    INDEX 01 00:06:00
+CUEEOF
+
+    rm -rf "$TMPDIR"
+    echo "MiSTer mode: disc image assembled without sector count limit" >> "$LOG_FILE"
+}
+
+# ==============================================================================
 #  3. PROCESSING PIPELINE
 # ==============================================================================
 process_video() {
     local FILE="$1"
+    local SEG_START="${2:-0}"       # start time in seconds (default: 0 = whole file)
+    local SEG_DURATION="${3:-}"     # max duration for this segment (default: entire file)
+    local DISC_NUM="${4:-}"         # disc number suffix (default: none = single disc)
+
     local FILENAME=$(basename -- "$FILE")
     local NAME="${FILENAME%.*}"
     local CLEAN_NAME=$(echo "$NAME" | tr ' ' '_' | tr -cd '[:alnum:]_-')
-    local LOG_FILE="$OUTPUT_DIR/${CLEAN_NAME}.log"
-    
+
+    local DISC_SUFFIX=""
+    [ -n "$DISC_NUM" ] && DISC_SUFFIX="_disc${DISC_NUM}"
+
+    # Seek/duration flags: -ss before -i for fast input seek; -t limits encode length
+    local FFMPEG_SEEK=""
+    local FFMPEG_DURATION=""
+    if [ -n "$SEG_DURATION" ]; then
+        FFMPEG_SEEK="-ss $SEG_START"
+        FFMPEG_DURATION="-t $SEG_DURATION"
+    fi
+
+    local LOG_FILE="$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.log"
+
     # Extract MISTR basename for XML generation
     local MISTR_BASENAME=$(basename "$MISTR_APP")
     local MISTR_BASENAME_UPPER=$(echo "$MISTR_BASENAME" | tr '[a-z]' '[A-Z]')
@@ -360,8 +497,9 @@ process_video() {
     fi
     
     # ENCODE VIDEO (multi-threaded ffmpeg for both modes)
-    ffmpeg -threads 0 -v info -i "$FILE" \
+    ffmpeg -threads 0 -v info $FFMPEG_SEEK -i "$FILE" \
         -vf "$FILTER_CHAIN" \
+        $FFMPEG_DURATION \
         $FFMPEG_RATE -pix_fmt yuv420p -f yuv4mpegpipe - 2>> "$LOG_FILE" \
         | mpeg2enc $MPEG2ENC_OPTS 2>> "$LOG_FILE"
 
@@ -407,7 +545,8 @@ process_video() {
     # Build audio encoding command based on audio mode (independent of video quality)
     if [ "$FAST_AUDIO" == "true" ]; then
         # --fastaudio: minimal encoding, no filters
-        ffmpeg -v info -i "$FILE" \
+        ffmpeg -v info $FFMPEG_SEEK -i "$FILE" \
+            $FFMPEG_DURATION \
             -ar 44100 -ac $AUDIO_CHANNELS -b:a $AUDIO_BITRATE \
             -f mp2 -y "temp_audio.mp2" >> "$LOG_FILE" 2>&1
     else
@@ -418,7 +557,8 @@ process_video() {
         else
             AUDIO_RESAMPLE_FILTER=""
         fi
-        ffmpeg -v info -i "$FILE" \
+        ffmpeg -v info $FFMPEG_SEEK -i "$FILE" \
+            $FFMPEG_DURATION \
             -af "${AUDIO_RESAMPLE_FILTER}loudnorm=I=-16:TP=-1.5:LRA=11" \
             -ar 44100 -ac $AUDIO_CHANNELS -b:a $AUDIO_BITRATE -compression_level 0 \
             -f mp2 -y "temp_audio.mp2" >> "$LOG_FILE" 2>&1
@@ -447,35 +587,42 @@ process_video() {
 
 
 
-    # 3.5 GENERATE XML (CDI_VCD or MISTRVCD)
-    echo -e "   ${YELLOW}📝 Generating XML...${NC}"
-    generate_vcd_xml "videocd.xml" "$CLEAN_NAME" "$USE_CDIVCD" "$CDI_FIX_DIR" "$MISTR_APP" "$MISTR_BASENAME_UPPER"
+    # Truncate volume label to 32 chars (ISO 9660 limit)
+    local VOLUME_LABEL="${CLEAN_NAME}${DISC_SUFFIX}"
+    VOLUME_LABEL="${VOLUME_LABEL:0:32}"
 
-    # 3.6 BUILD IMAGE
-    echo -e "   ${YELLOW}💿 Building Disc Image...${NC}"
-    echo -e "\n--- IMAGE BUILD LOG ---" >> "$LOG_FILE"
-    vcdxbuild --progress videocd.xml >> "$LOG_FILE" 2>&1
-    
+    # 3.5 / 3.6 GENERATE IMAGE
+    if [ "$MISTER_MODE" == "true" ]; then
+        echo -e "   ${YELLOW}💿 Building Disc Image (MiSTer mode — no size limit)...${NC}"
+        build_image_mister "$LOG_FILE" "$VOLUME_LABEL"
+    else
+        echo -e "   ${YELLOW}📝 Generating XML...${NC}"
+        generate_vcd_xml "videocd.xml" "$VOLUME_LABEL" "$USE_CDIVCD" "$CDI_FIX_DIR" "$MISTR_APP" "$MISTR_BASENAME_UPPER"
+        echo -e "   ${YELLOW}💿 Building Disc Image...${NC}"
+        echo -e "\n--- IMAGE BUILD LOG ---" >> "$LOG_FILE"
+        vcdxbuild --progress videocd.xml >> "$LOG_FILE" 2>&1
+    fi
+
     if [ -f "videocd.bin" ]; then
-        mv videocd.bin "$OUTPUT_DIR/${CLEAN_NAME}.bin"
-        sed "s|videocd.bin|${CLEAN_NAME}.bin|g" videocd.cue > "$OUTPUT_DIR/${CLEAN_NAME}.cue"
+        mv videocd.bin "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.bin"
+        sed "s|videocd.bin|${CLEAN_NAME}${DISC_SUFFIX}.bin|g" videocd.cue > "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.cue"
         rm videocd.cue
-        
-        DISC_SIZE=$(portable_du "$OUTPUT_DIR/${CLEAN_NAME}.bin")
-        echo -e "${GREEN}✅ Finished: $OUTPUT_DIR/${CLEAN_NAME}.bin ($DISC_SIZE)${NC}"
-        
+
+        DISC_SIZE=$(portable_du "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.bin")
+        echo -e "${GREEN}✅ Finished: $OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.bin ($DISC_SIZE)${NC}"
+
         # 3.7 AUTO-CHD
         if command -v chdman &> /dev/null; then
             echo -e "   ${YELLOW}🗜️  Compressing to CHD...${NC}"
             # Remove existing CHD if it exists
-            if [ -f "$OUTPUT_DIR/${CLEAN_NAME}.chd" ]; then
-                rm "$OUTPUT_DIR/${CLEAN_NAME}.chd"
+            if [ -f "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.chd" ]; then
+                rm "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.chd"
             fi
-            chdman createcd -i "$OUTPUT_DIR/${CLEAN_NAME}.cue" -o "$OUTPUT_DIR/${CLEAN_NAME}.chd" >> "$LOG_FILE" 2>&1
-            if [ -f "$OUTPUT_DIR/${CLEAN_NAME}.chd" ]; then
-                CHD_SIZE=$(portable_du "$OUTPUT_DIR/${CLEAN_NAME}.chd")
-                echo -e "${GREEN}✅ Created CHD: $OUTPUT_DIR/${CLEAN_NAME}.chd ($CHD_SIZE)${NC}"
-                # Optional: rm "$OUTPUT_DIR/${CLEAN_NAME}.bin" "$OUTPUT_DIR/${CLEAN_NAME}.cue"
+            chdman createcd -i "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.cue" -o "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.chd" >> "$LOG_FILE" 2>&1
+            if [ -f "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.chd" ]; then
+                CHD_SIZE=$(portable_du "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.chd")
+                echo -e "${GREEN}✅ Created CHD: $OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.chd ($CHD_SIZE)${NC}"
+                # Optional: rm "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.bin" "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.cue"
             fi
         fi
         echo -e "${CYAN}   📋 Log saved to: $LOG_FILE${NC}"
@@ -593,7 +740,19 @@ for video in "$INPUT_DIR"/*; do
         continue
     fi
 
-    process_video "$video"
+    TOTAL_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$video" 2>/dev/null)
+
+    if [ "$MISTER_MODE" == "false" ] && (( $(echo "${TOTAL_DURATION:-0} > $MAX_DISC_SECONDS" | bc -l) )); then
+        NUM_DISCS=$(awk -v d="$TOTAL_DURATION" -v m="$MAX_DISC_SECONDS" 'BEGIN{n=int(d/m); if(d-n*m>0) n++; print n}')
+        SEG_DURATION=$(awk -v d="$TOTAL_DURATION" -v n="$NUM_DISCS" 'BEGIN{printf "%.3f", d/n}')
+        echo -e "${CYAN}📀 Long video ($(printf '%.0f' "$TOTAL_DURATION")s). Splitting evenly into $NUM_DISCS discs (~$(printf '%.0f' "$SEG_DURATION")s each)...${NC}"
+        for disc in $(seq 1 "$NUM_DISCS"); do
+            START=$(awk -v n="$((disc-1))" -v s="$SEG_DURATION" 'BEGIN{printf "%.3f", n*s}')
+            process_video "$video" "$START" "$SEG_DURATION" "$disc"
+        done
+    else
+        process_video "$video"
+    fi
 done
 
 echo -e "\n${GREEN}🎉 BATCH COMPLETE!${NC}"
