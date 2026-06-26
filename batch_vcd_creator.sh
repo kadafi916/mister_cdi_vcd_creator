@@ -307,8 +307,10 @@ build_image_mister() {
         "$ABS_CDI_DIR" "$ABS_MISTR_APP" "$MISTR_UPPER"
 
     # Run vcdxbuild from TMPDIR so relative "compliant.mpg" resolves correctly
+    local ABS_LOG_FILE
+    ABS_LOG_FILE=$(realpath "$LOG_FILE")
     pushd "$TMPDIR" > /dev/null
-    vcdxbuild videocd.xml >> "$LOG_FILE" 2>&1
+    vcdxbuild videocd.xml >> "$ABS_LOG_FILE" 2>&1
     popd > /dev/null
 
     if [ ! -f "$TMPDIR/videocd.bin" ]; then
@@ -334,8 +336,8 @@ import sys
 
 SYNC = b'\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00'
 PACK_SIZE = 2324
-ABS_START = 450  # track1 (300 sectors) + pregap (150 sectors)
-SUBHDR = b'\x01\x01\x08\x00\x01\x01\x08\x00'
+ABS_START = 600  # BIN sector 450 (track2 index01) + 150 sector lead-in offset
+SUBHDR = b'\x01\x00\x62\x05\x01\x00\x62\x05'  # file1, ch0, RT|Form2|Video, coding=0x05
 
 def bcd(v): return ((v // 10) << 4) | (v % 10)
 
@@ -681,7 +683,9 @@ process_video() {
         echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
     fi
     
-    rm -f temp_video.m1v temp_audio.mp2 compliant.mpg videocd.xml
+    if [ -f "videocd.bin" ] || [ -f "$OUTPUT_DIR/${CLEAN_NAME}${DISC_SUFFIX}.bin" ]; then
+        rm -f temp_video.m1v temp_audio.mp2 compliant.mpg videocd.xml
+    fi
 }
 
 # ==============================================================================
