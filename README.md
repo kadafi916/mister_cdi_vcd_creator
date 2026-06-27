@@ -53,6 +53,7 @@ chmod +x batch_vcd_creator.sh
 | `--fast` | Fast mode — Lanczos scaling, lighter motion search. Much faster, still very watchable |
 | `--fastaudio` | Skip loudnorm audio normalization (faster, slightly less consistent volume) |
 | `--fast --fastaudio` | Fastest possible encode |
+| `--mistrvcd` | Use the minimal MISTRVCD.APP bridge instead of CDI_VCD.APP (no player controls, autoplay only) |
 | `--force-mono` | Force mono audio output at 128 kbps |
 | `--auto-mono` | Detect and downmix to mono if both stereo channels are identical |
 | `--lax` | Also produce a second disc image without strict sector alignment (for compatibility testing) |
@@ -66,6 +67,8 @@ The 96-minute limit exists because vcdxbuild has a hardcoded sector ceiling of ~
 ## CD-i Bridge
 
 The script downloads **CDI_VCD.APP v4.11** from [icdia.co.uk](http://www.icdia.co.uk) — a full-featured VCD player for CD-i with on-screen controls, chapter navigation, and timecode display. It auto-plays on disc insert.
+
+Use `--mistrvcd` to substitute MISTRVCD.APP — a minimal bridge that autoplays with no on-screen controls.
 
 
 ## Output Files
