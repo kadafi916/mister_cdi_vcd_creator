@@ -356,7 +356,7 @@ process_video() {
         echo "  ✓ 4:2:0 chroma, 10-bit DC, Closed GOP" >> "$LOG_FILE"
         echo "----------------------------------------------------------------" >> "$LOG_FILE"
         
-        FILTER_CHAIN="yadif=1:-1:1,hqdn3d=1.5:1.5:6:6,crop='min(iw,ih*4/3)':'min(ih,iw*3/4)',scale=$SCALE_RES:flags=lanczos+accurate_rnd,eq=contrast=1.05:saturation=1.15:gamma=1.0,unsharp=5:5:0.5:5:5:0.0"
+        FILTER_CHAIN="yadif=1:-1:1,hqdn3d=1.5:1.5:6:6,crop='trunc(min(iw,ih*4/3)/2)*2':ih,scale=$SCALE_RES:flags=lanczos+accurate_rnd,eq=contrast=1.05:saturation=1.15:gamma=1.0,unsharp=5:5:0.5:5:5:0.0"
         
         # VBV buffer: Using -V 46 instead of 230 for better hardware compatibility
         # Smaller buffer = more conservative = less chance of decoder underruns
@@ -374,7 +374,7 @@ process_video() {
         echo "  ✓ 4:2:0 chroma, 10-bit DC" >> "$LOG_FILE"
         echo "----------------------------------------------------------------" >> "$LOG_FILE"
         
-        FILTER_CHAIN="crop='min(iw,ih*4/3)':'min(ih,iw*3/4)',scale=$SCALE_RES:flags=lanczos,eq=contrast=1.05:saturation=1.1"
+        FILTER_CHAIN="crop='trunc(min(iw,ih*4/3)/2)*2':ih,scale=$SCALE_RES:flags=lanczos,eq=contrast=1.05:saturation=1.1"
         
         # Fast mode: -q 6 instead of -q 9, and -4 2 -2 3 for faster motion search
         MPEG2ENC_OPTS="-v 0 -o temp_video.m1v -f 1 $TV_STD_FLAG -a 2 -K tmpgenc -g 15 -G 15 -q 6 -4 2 -2 3 -b 1150 -V 46 -D 10"
