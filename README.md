@@ -68,7 +68,7 @@ The 96-minute limit exists because vcdxbuild has a hardcoded sector ceiling of ~
 
 The script downloads **CDI_VCD.APP v4.11** from [icdia.co.uk](http://www.icdia.co.uk) — a full-featured VCD player for CD-i with on-screen controls, chapter navigation, and timecode display. It auto-plays on disc insert.
 
-Use `--mistrvcd` to substitute MISTRVCD.APP — a minimal bridge that autoplays with no on-screen controls.
+Use `--mistrvcd` to use the minimal MISTRVCD.APP bridge instead (no player controls, autoplay only).
 
 
 ## Output Files
