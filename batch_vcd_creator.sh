@@ -554,7 +554,7 @@ process_video() {
         rm -f compliant_lax.mpg videocd_lax.xml
         
         echo -e "\n${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║  COMPARISON TEST: Two versions created for hardware testing   ║${NC}"
+        echo -e "${CYAN}║  COMPARISON TEST: Two versions created for hardware testing    ║${NC}"
         echo -e "${CYAN}║  Strict: ${CLEAN_NAME}.chd (with -R11 -V 46)                  ║${NC}"
         echo -e "${CYAN}║  Lax:    ${CLEAN_NAME}_lax.chd (no -R11, -V 46)               ║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
@@ -571,10 +571,10 @@ process_video() {
 if [ "$QUALITY_MODE" == "ultra" ]; then
     echo -e "${YELLOW}╔════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${YELLOW}║           ULTRA QUALITY MODE - MAXIMUM SETTINGS                ║${NC}"
-    echo -e "${YELLOW}║  This will take SIGNIFICANTLY longer than fast mode           ║${NC}"
-    echo -e "${YELLOW}║  Use --fast flag for faster encoding with good quality        ║${NC}"
+    echo -e "${YELLOW}║  This will take SIGNIFICANTLY longer than fast mode            ║${NC}"
+    echo -e "${YELLOW}║  Use --fast flag for faster encoding with good quality         ║${NC}"
     if [ "$LAX_MODE" == true ]; then
-        echo -e "${YELLOW}║  LAX MODE: Creating both strict (-R11) and lax versions       ║${NC}"
+        echo -e "${YELLOW}║  LAX MODE: Creating both strict (-R11) and lax versions        ║${NC}"
     fi
     if [ "$AUDIO_MODE" != "stereo" ]; then
         echo -e "${YELLOW}║  AUDIO: $AUDIO_MODE mode enabled                               ║${NC}"
@@ -583,9 +583,9 @@ if [ "$QUALITY_MODE" == "ultra" ]; then
 else
     echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║              FAST MODE - GOOD QUALITY, FASTER SPEED            ║${NC}"
-    echo -e "${GREEN}║  Use without --fast flag for ultra quality mode               ║${NC}"
+    echo -e "${GREEN}║  Use without --fast flag for ultra quality mode                ║${NC}"
     if [ "$LAX_MODE" == true ]; then
-        echo -e "${GREEN}║  LAX MODE: Creating both strict (-R11) and lax versions       ║${NC}"
+        echo -e "${GREEN}║  LAX MODE: Creating both strict (-R11) and lax versions        ║${NC}"
     fi
     if [ "$AUDIO_MODE" != "stereo" ]; then
         echo -e "${GREEN}║  AUDIO: $AUDIO_MODE mode enabled                               ║${NC}"
